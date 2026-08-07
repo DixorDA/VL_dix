@@ -24,7 +24,7 @@ window.VLi18n = (() => {
             'sidebar.folders': 'Folders',
             'sidebar.statistics': 'Statistics',
             'sidebar.settings': 'Settings',
-            'sidebar.version': 'Vision Lumina v2.0',
+            'sidebar.version': 'Vision Lumina v2.6',
 
             // Library view — empty state
             'library.empty_title': 'Your library is empty',
@@ -116,7 +116,7 @@ window.VLi18n = (() => {
             'settings.language_desc': 'Choose the display language for the app',
 
             'settings.group_about': 'About',
-            'settings.about_version': 'Version 2.0.0',
+            'settings.about_version': 'Version 2.6.0',
             'settings.about_credits': 'Made by ZeFair Network',
             'settings.about_tech': 'Electron + HTML5 Video',
 
@@ -191,7 +191,7 @@ window.VLi18n = (() => {
             'sidebar.folders': 'Папки',
             'sidebar.statistics': 'Статистика',
             'sidebar.settings': 'Настройки',
-            'sidebar.version': 'Vision Lumina v1.7',
+            'sidebar.version': 'Vision Lumina v2.6',
 
             // Library view — empty state
             'library.empty_title': 'Библиотека пуста',
@@ -283,7 +283,7 @@ window.VLi18n = (() => {
             'settings.language_desc': 'Выберите язык отображения приложения',
 
             'settings.group_about': 'О программе',
-            'settings.about_version': 'Версия 2.0.0',
+            'settings.about_version': 'Версия 2.6.0',
             'settings.about_credits': 'Разработано ZeFair Network',
             'settings.about_tech': 'Electron + HTML5 Video',
 
