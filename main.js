@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { pathToFileURL } = require('url');
@@ -18,7 +18,7 @@ function createWindow() {
             nodeIntegration: false,
             contextIsolation: true,
             sandbox: false,
-            webSecurity: false // Разрешаем загрузку локальных файлов
+            webSecurity: true // Разрешаем загрузку локальных файлов
         },
         titleBarStyle: 'default',
         icon: path.join(__dirname, 'favicon.ico') // Добавьте иконку если нужно
@@ -47,6 +47,20 @@ function createWindow() {
         }
     });
 }
+
+// Безопасный протокол при запуске приложения
+app.whenReady().then(() => {
+    protocol.registerFileProtocol('media', (request, callback) => {
+        const url = request.url.replace('media://', '');
+        try {
+            return callback(decodeURIComponent(url));
+        } catch (error) {
+            console.error(error);
+        }
+    });
+
+    createWindow();
+});
 
 // Обработка аргументов командной строки
 function handleCommandLineArgs() {

@@ -3,12 +3,94 @@
 //          video state synchronization over network,
 //          UI panel management, peer list.
 
+// Функция для Base64
+function bytesToBase64(bytes) {
+    let binary = '';
+    const len = bytes.byteLength;
+    const CHUNK_SIZE = 0x8000; // Обрабатываем по 32 КБ, не перегружая стек
+    for (let i = 0; i < len; i += CHUNK_SIZE) {
+        binary += String.fromCharCode.apply(
+            null,
+            bytes.subarray(i, i + CHUNK_SIZE)
+        );
+    }
+    return btoa(binary);
+}
+
+// Генерация 256-битного симметричного ключа AES-GCM
+async function generateRoomKey() {
+    return await window.crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+        true,
+        ["encrypt", "decrypt"]
+    );
+}
+
+// Экспорт ключа в Base64
+async function exportKey(key) {
+    const exported = await window.crypto.subtle.exportKey("raw", key);
+    return bytesToBase64(new Uint8Array(exported));
+}
+
+// Импорт ключа из Base64
+async function importKey(base64Key) {
+    const rawKey = Uint8Array.from(atob(base64Key), c => c.charCodeAt(0));
+    return await window.crypto.subtle.importKey(
+        "raw",
+        rawKey,
+        { name: "AES-GCM" },
+        true,
+        ["encrypt", "decrypt"]
+    );
+}
+
+// Шифрование JSON-объекта любого размера
+async function encryptPayload(dataObject, key) {
+    const encoder = new TextEncoder();
+    const encodedData = encoder.encode(JSON.stringify(dataObject));
+
+    // Вектор инициализации (IV) 12 байт
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+
+    const encryptedContent = await window.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        encodedData
+    );
+
+    // Объединяем IV и шифр
+    const combined = new Uint8Array(iv.length + encryptedContent.byteLength);
+    combined.set(iv, 0);
+    combined.set(new Uint8Array(encryptedContent), iv.length);
+
+    // Кодируем объединенный массив в Base64 чанками
+    return bytesToBase64(combined);
+}
+
+// Расшифровка строки Base64
+async function decryptPayload(encryptedBase64, key) {
+    const combined = Uint8Array.from(atob(encryptedBase64), c => c.charCodeAt(0));
+
+    const iv = combined.slice(0, 12);
+    const data = combined.slice(12);
+
+    const decryptedContent = await window.crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: iv },
+        key,
+        data
+    );
+
+    const decoder = new TextDecoder();
+    return JSON.parse(decoder.decode(decryptedContent));
+}
+
 class WatchTogether {
     /**
      * @param {VisionLumina} player
      */
     constructor(player) {
         this.player = player;
+        this._roomKey = null; // Key
 
         // DOM refs (assigned in setup())
         this.panel                  = null;
@@ -111,9 +193,13 @@ class WatchTogether {
         const port   = this.portInput.value.trim();
         const result = await window.vlApi.wtCreateRoom(port || 0);
         if (result.success) {
-            this.hostAddress.textContent = `${result.hostIp}:${result.port}`;
+            this._roomKey = await generateRoomKey();
+            const exportedKey = await exportKey(this._roomKey);
+
+            // Добавляем ключ к отображаемым адресам
+            this.hostAddress.textContent = `${result.hostIp}:${result.port}#${exportedKey}`;
             if (result.publicIp) {
-                this.publicAddress.textContent = `${result.publicIp}:${result.port}`;
+                this.publicAddress.textContent = `${result.publicIp}:${result.port}#${exportedKey}`;
                 this.publicAddressSection.classList.remove('hidden');
             }
             this.hostInfo.classList.remove('hidden');
@@ -127,6 +213,7 @@ class WatchTogether {
     }
 
     async closeRoom() {
+        this._roomKey = null;
         await window.vlApi.wtCloseRoom();
         this.hostInfo.classList.add('hidden');
         this.publicAddressSection.classList.add('hidden');
@@ -143,7 +230,19 @@ class WatchTogether {
     async joinRoom() {
         const address = this.joinInput.value.trim();
         if (!address) return;
-        const result = await window.vlApi.wtJoinRoom(address);
+        // Парсим адрес и ключ
+        const [netAddress, base64Key] = address.split('#');
+        if (!base64Key) {
+            this.setStatus('error', 'Отсутствует ключ комнаты!');
+            return;
+        }
+        try {
+            this._roomKey = await importKey(base64Key);
+        } catch (err) {
+            this.setStatus('error', 'Невалидный ключ');
+            return;
+        }
+        const result = await window.vlApi.wtJoinRoom(netAddress);
         if (result.success) {
             this.joinBtn.classList.add('hidden');
             this.leaveBtn.classList.remove('hidden');
@@ -156,6 +255,7 @@ class WatchTogether {
     }
 
     async leaveRoom() {
+        this._roomKey = null;
         await window.vlApi.wtLeaveRoom();
         this.joinBtn.classList.remove('hidden');
         this.leaveBtn.classList.add('hidden');
@@ -196,11 +296,23 @@ class WatchTogether {
 
     // ── Message Handling ─────────────────────────────────────────────────────
 
-    onMessage(msg) {
-        if (!msg || msg.type !== 'state') return;
+    async onMessage(msg) {
+        if (!msg) return;
+
+        let data = msg;
+        if (msg.type === 'encrypted') {
+            if (!this._roomKey) return;
+            try {
+                data = await decryptPayload(msg.payload, this._roomKey);
+            } catch (err) {
+                console.error('Ошибка расшифровки состояния:', err);
+                return;
+            }
+        }
+        if (!data || data.type !== 'state') return;
         this._isRemoteUpdate = true;
         try {
-            const { action, time } = msg;
+            const { action, time } = data;
             const threshold = 0.5;
             switch (action) {
                 case 'play':
@@ -214,9 +326,9 @@ class WatchTogether {
                     if (time !== undefined && Math.abs(this.player.video.currentTime - time) > threshold) {
                         this.player.video.currentTime = time;
                     }
-                    if (action === 'sync' && msg.playing !== undefined) {
-                        if (msg.playing && this.player.video.paused)  this.player.video.play();
-                        else if (!msg.playing && !this.player.video.paused) this.player.video.pause();
+                    if (action === 'sync' && data.playing !== undefined) {
+                        if (data.playing && this.player.video.paused)  this.player.video.play();
+                        else if (!data.playing && !this.player.video.paused) this.player.video.pause();
                     }
                     break;
             }
@@ -228,6 +340,7 @@ class WatchTogether {
     onStatus(status) {
         if (!status) return;
         if (status.type === 'disconnected') {
+            this._roomKey = null;
             this.setStatus('disconnected');
             this._stopSyncTimer();
             this._peers.clear();
@@ -243,11 +356,23 @@ class WatchTogether {
     }
 
     // ── Video Event Binding ───────────────────────────────────────────────────
+    async _sendEncryptedState(dataObject) {
+        if (!this._roomKey) {
+            window.vlApi.wtSend(dataObject).catch(() => { });
+            return;
+        }
+        try {
+            const encryptedText = await encryptPayload(dataObject, this._roomKey);
+            window.vlApi.wtSend({ type: 'encrypted', payload: encryptedText }).catch(() => { });
+        } catch (err) {
+            console.error('Ошибка E2EE шифрования:', err);
+        }
+    }
 
     _bindVideoEvents() {
         const sendState = (action, time) => {
             if (this._isRemoteUpdate) return;
-            window.vlApi.wtSend({ type: 'state', action, time: time ?? this.player.video.currentTime }).catch(() => {});
+            this._sendEncryptedState({ type: 'state', action, time: time ?? this.player.video.currentTime }).catch(() => {});
         };
 
         this.player.video.addEventListener('play',   () => sendState('play'));
@@ -259,7 +384,7 @@ class WatchTogether {
         this._stopSyncTimer();
         this._syncTimer = setInterval(() => {
             if (!this.player.video.paused) {
-                window.vlApi.wtSend({
+                this._sendEncryptedState({
                     type:    'state',
                     action:  'sync',
                     time:    this.player.video.currentTime,
